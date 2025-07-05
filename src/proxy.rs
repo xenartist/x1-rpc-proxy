@@ -1,0 +1,117 @@
+use anyhow::Result;
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::Json,
+    routing::post,
+    Router,
+    serve,
+};
+use serde_json::json;
+use std::sync::Arc;
+use tracing::{error, info, warn};
+
+use crate::node_cache::NodeCache;
+use crate::rpc_client::forward_rpc_request;
+use crate::types::{RpcRequest, RpcResponse, RpcError};
+
+pub struct ProxyServer {
+    node_cache: Arc<NodeCache>,
+    rpc_timeout: u64,
+}
+
+impl ProxyServer {
+    pub fn new(node_cache: Arc<NodeCache>, rpc_timeout: u64) -> Self {
+        Self {
+            node_cache,
+            rpc_timeout,
+        }
+    }
+    
+    pub async fn start(&self, port: u16) -> Result<()> {
+        let app = Router::new()
+            .route("/", post(rpc_handler))
+            .route("/health", axum::routing::get(health_handler))
+            .route("/stats", axum::routing::get(stats_handler))
+            .with_state(AppState {
+                node_cache: Arc::clone(&self.node_cache),
+                rpc_timeout: self.rpc_timeout,
+            });
+        
+        let addr = format!("0.0.0.0:{}", port);
+        info!("RPC proxy server starting on: {}", addr);
+        
+        let listener = tokio::net::TcpListener::bind(&addr).await?;
+        serve(listener, app).await?;
+        
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct AppState {
+    node_cache: Arc<NodeCache>,
+    rpc_timeout: u64,
+}
+
+async fn rpc_handler(
+    State(state): State<AppState>,
+    Json(request): Json<RpcRequest>,
+) -> Result<Json<RpcResponse>, (StatusCode, Json<RpcResponse>)> {
+    // Get a random active node
+    match state.node_cache.get_random_active_node().await {
+        Some(node) => {
+            info!("Forwarding RPC request to node: {}", node.endpoint);
+            
+            // Forward the request
+            match forward_rpc_request(&node.endpoint, &request, state.rpc_timeout).await {
+                Ok(response) => Ok(Json(response)),
+                Err(e) => {
+                    error!("RPC forwarding failed: {}", e);
+                    let error_response = RpcResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: request.id,
+                        result: None,
+                        error: Some(RpcError {
+                            code: -32603,
+                            message: "Internal error".to_string(),
+                            data: Some(json!({"details": e.to_string()})),
+                        }),
+                    };
+                    Err((StatusCode::INTERNAL_SERVER_ERROR, Json(error_response)))
+                }
+            }
+        }
+        None => {
+            warn!("No available RPC nodes");
+            let error_response = RpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request.id,
+                result: None,
+                error: Some(RpcError {
+                    code: -32000,
+                    message: "No available RPC nodes".to_string(),
+                    data: None,
+                }),
+            };
+            Err((StatusCode::SERVICE_UNAVAILABLE, Json(error_response)))
+        }
+    }
+}
+
+async fn health_handler() -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "ok",
+        "service": "x1-rpc-proxy"
+    }))
+}
+
+async fn stats_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let (total, active) = state.node_cache.get_node_stats().await;
+    
+    Json(json!({
+        "total_nodes": total,
+        "active_nodes": active,
+        "uptime": "running"
+    }))
+} 
