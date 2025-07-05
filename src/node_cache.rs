@@ -49,20 +49,19 @@ impl NodeCache {
         let nodes = self.nodes.read().await;
         
         // Filter active nodes with response time data
-        let mut active_nodes: Vec<RpcNode> = nodes
+        let mut active_nodes_with_timing: Vec<RpcNode> = nodes
             .values()
             .filter(|node| node.is_active && node.response_time.is_some())
             .cloned()
             .collect();
         
-        if active_nodes.is_empty() {
+        if active_nodes_with_timing.is_empty() {
             debug!("No active nodes with response time data, falling back to any active node");
-            // Fallback to any active node if no response time data
-            let fallback_nodes: Vec<RpcNode> = nodes
-                .values()
-                .filter(|node| node.is_active)
-                .cloned()
-                .collect();
+            // Drop the read lock before calling get_active_nodes
+            drop(nodes);
+            
+            // Use the get_active_nodes method as fallback
+            let fallback_nodes = self.get_active_nodes().await;
             
             if fallback_nodes.is_empty() {
                 return None;
@@ -73,14 +72,14 @@ impl NodeCache {
         }
         
         // Sort by response time (fastest first)
-        active_nodes.sort_by(|a, b| {
+        active_nodes_with_timing.sort_by(|a, b| {
             let time_a = a.response_time.unwrap_or(Duration::from_secs(999));
             let time_b = b.response_time.unwrap_or(Duration::from_secs(999));
             time_a.cmp(&time_b)
         });
         
         // Take top 20 fastest nodes (or all if less than 20)
-        let top_nodes: Vec<RpcNode> = active_nodes.into_iter().take(20).collect();
+        let top_nodes: Vec<RpcNode> = active_nodes_with_timing.into_iter().take(20).collect();
         
         debug!("Selecting from top {} fastest nodes", top_nodes.len());
         

@@ -34,6 +34,10 @@ struct Args {
     #[arg(long, default_value = "10")]
     rpc_timeout: u64,
     
+    /// Maximum concurrent node tests (for single-core optimization)
+    #[arg(long, default_value = "5")]
+    max_concurrent_tests: usize,
+    
     /// Enable verbose logging
     #[arg(long)]
     verbose: bool,
@@ -56,6 +60,7 @@ async fn main() -> Result<()> {
     
     info!("Starting X1 RPC Proxy Server...");
     info!("Target cluster: {}", args.cluster_url);
+    info!("Max concurrent tests: {}", args.max_concurrent_tests);
     
     // Create shared state
     let node_cache = Arc::new(NodeCache::new());
@@ -65,7 +70,13 @@ async fn main() -> Result<()> {
     let node_cache_clone = Arc::clone(&node_cache);
     let gossip_client_clone = Arc::clone(&gossip_client);
     tokio::spawn(async move {
-        node_discovery_task(node_cache_clone, gossip_client_clone, args.health_check_interval, args.rpc_timeout).await;
+        node_discovery_task(
+            node_cache_clone, 
+            gossip_client_clone, 
+            args.health_check_interval, 
+            args.rpc_timeout,
+            args.max_concurrent_tests
+        ).await;
     });
     
     // Wait for node discovery task to run first
@@ -83,42 +94,74 @@ async fn node_discovery_task(
     gossip_client: Arc<GossipClient>,
     health_check_interval: u64,
     rpc_timeout: u64,
+    max_concurrent_tests: usize,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(health_check_interval));
     
     loop {
         interval.tick().await;
         
-        match gossip_client.get_rpc_nodes().await {
-            Ok(nodes) => {
+        // Use spawn_blocking for potentially blocking gossip operation
+        let gossip_client_clone = Arc::clone(&gossip_client);
+        let nodes_result = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(gossip_client_clone.get_rpc_nodes())
+        }).await;
+        
+        match nodes_result {
+            Ok(Ok(nodes)) => {
                 info!("Discovered {} potential RPC nodes", nodes.len());
                 
-                // Test all nodes in parallel
-                let mut handles = Vec::new();
+                // Process nodes in batches to limit concurrency
+                let mut batch_handles = Vec::new();
+                let mut batch_count = 0;
+                
                 for node in nodes {
                     let node_cache_clone = Arc::clone(&node_cache);
                     let handle = tokio::spawn(async move {
+                        // Add a small delay to prevent overwhelming single core
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                         test_and_update_node(node_cache_clone, node, rpc_timeout).await;
                     });
-                    handles.push(handle);
+                    batch_handles.push(handle);
+                    batch_count += 1;
+                    
+                    // Process in batches to limit concurrent operations
+                    if batch_count >= max_concurrent_tests {
+                        // Wait for current batch to complete
+                        for handle in batch_handles.drain(..) {
+                            if let Err(e) = handle.await {
+                                error!("Node test task failed: {}", e);
+                            }
+                        }
+                        batch_count = 0;
+                        
+                        // Brief pause between batches
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                 }
                 
-                // Wait for all tests to complete
-                for handle in handles {
+                // Wait for remaining tasks
+                for handle in batch_handles {
                     if let Err(e) = handle.await {
                         error!("Node test task failed: {}", e);
                     }
                 }
                 
-                let active_count = node_cache.get_active_nodes().await.len();
-                info!("Current active RPC nodes: {}", active_count);
+                let (total, active, min_response, max_response) = node_cache.get_performance_stats().await;
+                info!("Node performance stats - Total: {}, Active: {}", total, active);
+                if let (Some(min), Some(max)) = (min_response, max_response) {
+                    info!("Response time range: {:?} - {:?}", min, max);
+                }
                 
-                if active_count == 0 {
+                if active == 0 {
                     warn!("Warning: No active RPC nodes available!");
                 }
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("Failed to get RPC nodes: {}", e);
+            }
+            Err(e) => {
+                error!("Gossip task join error: {}", e);
             }
         }
     }
@@ -126,6 +169,9 @@ async fn node_discovery_task(
 
 async fn test_and_update_node(node_cache: Arc<NodeCache>, node: types::RpcNode, rpc_timeout: u64) {
     let start_time = std::time::Instant::now();
+    
+    // Yield to allow other tasks to run
+    tokio::task::yield_now().await;
     
     match rpc_client::test_rpc_node(&node.endpoint, rpc_timeout).await {
         Ok(_) => {
