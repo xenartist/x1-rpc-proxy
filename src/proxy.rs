@@ -10,6 +10,7 @@ use axum::{
 use serde_json::json;
 use std::sync::Arc;
 use tracing::{error, info, warn};
+use tower_http::cors::{CorsLayer, Any};
 
 use crate::node_cache::NodeCache;
 use crate::rpc_client::forward_rpc_request;
@@ -34,6 +35,12 @@ impl ProxyServer {
             .route("/health", axum::routing::get(health_handler))
             .route("/stats", axum::routing::get(stats_handler))
             .route("/performance", axum::routing::get(performance_handler))
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(Any)
+                    .allow_methods(Any)
+                    .allow_headers(Any)
+            )
             .with_state(AppState {
                 node_cache: Arc::clone(&self.node_cache),
                 rpc_timeout: self.rpc_timeout,
