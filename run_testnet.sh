@@ -73,11 +73,11 @@ if [ "$USE_SUDO" = true ]; then
         --port $PORT \
         --cluster-url https://rpc.testnet.x1.xyz \
         --health-check-interval 30 \
-        --rpc-timeout 5
+        --rpc-timeout 2
 else
     cargo run --release -- \
         --port $PORT \
         --cluster-url https://rpc.testnet.x1.xyz \
         --health-check-interval 30 \
-        --rpc-timeout 5
+        --rpc-timeout 2
 fi 
