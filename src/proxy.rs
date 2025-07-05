@@ -33,6 +33,7 @@ impl ProxyServer {
             .route("/", post(rpc_handler))
             .route("/health", axum::routing::get(health_handler))
             .route("/stats", axum::routing::get(stats_handler))
+            .route("/performance", axum::routing::get(performance_handler))
             .with_state(AppState {
                 node_cache: Arc::clone(&self.node_cache),
                 rpc_timeout: self.rpc_timeout,
@@ -58,10 +59,14 @@ async fn rpc_handler(
     State(state): State<AppState>,
     Json(request): Json<RpcRequest>,
 ) -> Result<Json<RpcResponse>, (StatusCode, Json<RpcResponse>)> {
-    // Get a random active node
-    match state.node_cache.get_random_active_node().await {
+    // Get a random node from the top 20 fastest nodes
+    match state.node_cache.get_random_fast_node().await {
         Some(node) => {
-            info!("Forwarding RPC request to node: {}", node.endpoint);
+            let response_time_info = node.response_time
+                .map(|t| format!(" (avg response: {:?})", t))
+                .unwrap_or_else(|| " (no timing data)".to_string());
+            
+            info!("Forwarding RPC request to fast node: {}{}", node.endpoint, response_time_info);
             
             // Forward the request
             match forward_rpc_request(&node.endpoint, &request, state.rpc_timeout).await {
@@ -113,5 +118,17 @@ async fn stats_handler(State(state): State<AppState>) -> Json<serde_json::Value>
         "total_nodes": total,
         "active_nodes": active,
         "uptime": "running"
+    }))
+}
+
+async fn performance_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let (total, active, min_response, max_response) = state.node_cache.get_performance_stats().await;
+    
+    Json(json!({
+        "total_nodes": total,
+        "active_nodes": active,
+        "min_response_time_ms": min_response.map(|t| t.as_millis()),
+        "max_response_time_ms": max_response.map(|t| t.as_millis()),
+        "performance_optimization": "top_20_fastest_nodes"
     }))
 } 
