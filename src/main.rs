@@ -38,6 +38,14 @@ struct Args {
     #[arg(long, default_value = "5")]
     max_concurrent_tests: usize,
     
+    /// Maximum concurrent RPC requests (for single-core optimization)
+    #[arg(long, default_value = "2")]
+    max_concurrent_rpc_requests: usize,
+    
+    /// Maximum queue wait time (seconds)
+    #[arg(long, default_value = "30")]
+    max_queue_wait_time: u64,
+    
     /// Enable verbose logging
     #[arg(long)]
     verbose: bool,
@@ -83,7 +91,12 @@ async fn main() -> Result<()> {
     sleep(Duration::from_secs(2)).await;
     
     // Start proxy server
-    let proxy_server = ProxyServer::new(Arc::clone(&node_cache), args.rpc_timeout);
+    let proxy_server = ProxyServer::new(
+        Arc::clone(&node_cache), 
+        args.rpc_timeout,
+        args.max_concurrent_rpc_requests,
+        args.max_queue_wait_time
+    );
     proxy_server.start(args.port).await?;
     
     Ok(())
