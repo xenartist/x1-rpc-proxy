@@ -72,12 +72,12 @@ if [ "$USE_SUDO" = true ]; then
     sudo -E env PATH="$PATH" HOME="$HOME" USER="$USER" cargo run --release -- \
         --port $PORT \
         --cluster-url https://rpc.testnet.x1.xyz \
-        --health-check-interval 600 \
+        --health-check-interval 3600 \
         --rpc-timeout 2
 else
     cargo run --release -- \
         --port $PORT \
         --cluster-url https://rpc.testnet.x1.xyz \
-        --health-check-interval 600 \
+        --health-check-interval 3600 \
         --rpc-timeout 2
 fi 
