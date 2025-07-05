@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::process::Command;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::types::RpcNode;
 
@@ -10,12 +10,6 @@ pub struct GossipClient {
 }
 
 impl GossipClient {
-    pub fn new(_gossip_port: u16) -> Self {
-        Self {
-            cluster_url: "https://rpc.testnet.x1.xyz".to_string(),
-        }
-    }
-    
     pub fn new_with_cluster(cluster_url: &str) -> Self {
         Self {
             cluster_url: cluster_url.to_string(),
@@ -229,4 +223,4 @@ impl GossipClient {
         info!("Using default X1 cluster RPC node list with {} nodes", nodes.len());
         Ok(nodes)
     }
-} 
+}
