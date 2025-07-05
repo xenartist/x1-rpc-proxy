@@ -44,7 +44,7 @@ impl NodeCache {
             .collect()
     }
     
-    /// Get a random node from the top 20 fastest active nodes
+    /// Get a random node from the top 100 fastest active nodes
     pub async fn get_random_fast_node(&self) -> Option<RpcNode> {
         let nodes = self.nodes.read().await;
         
@@ -78,8 +78,8 @@ impl NodeCache {
             time_a.cmp(&time_b)
         });
         
-        // Take top 20 fastest nodes (or all if less than 20)
-        let top_nodes: Vec<RpcNode> = active_nodes_with_timing.into_iter().take(20).collect();
+        // Take top 100 fastest nodes (or all if less than 100)
+        let top_nodes: Vec<RpcNode> = active_nodes_with_timing.into_iter().take(100).collect();
         
         debug!("Selecting from top {} fastest nodes", top_nodes.len());
         

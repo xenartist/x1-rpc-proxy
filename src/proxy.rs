@@ -59,7 +59,7 @@ async fn rpc_handler(
     State(state): State<AppState>,
     Json(request): Json<RpcRequest>,
 ) -> Result<Json<RpcResponse>, (StatusCode, Json<RpcResponse>)> {
-    // Get a random node from the top 20 fastest nodes
+    // Get a random node from the top 100 fastest nodes
     match state.node_cache.get_random_fast_node().await {
         Some(node) => {
             let response_time_info = node.response_time
@@ -129,6 +129,6 @@ async fn performance_handler(State(state): State<AppState>) -> Json<serde_json::
         "active_nodes": active,
         "min_response_time_ms": min_response.map(|t| t.as_millis()),
         "max_response_time_ms": max_response.map(|t| t.as_millis()),
-        "performance_optimization": "top_20_fastest_nodes"
+        "performance_optimization": "top_100_fastest_nodes"
     }))
 } 
