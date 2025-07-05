@@ -44,17 +44,6 @@ impl NodeCache {
             .collect()
     }
     
-    pub async fn get_random_active_node(&self) -> Option<RpcNode> {
-        let active_nodes = self.get_active_nodes().await;
-        
-        if active_nodes.is_empty() {
-            return None;
-        }
-        
-        let mut rng = rand::thread_rng();
-        active_nodes.choose(&mut rng).cloned()
-    }
-    
     /// Get a random node from the top 20 fastest active nodes
     pub async fn get_random_fast_node(&self) -> Option<RpcNode> {
         let nodes = self.nodes.read().await;
