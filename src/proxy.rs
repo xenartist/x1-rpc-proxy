@@ -12,8 +12,6 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn, debug};
 use tower_http::cors::{CorsLayer, Any};
-use std::collections::HashMap;
-use tokio::sync::RwLock;
 use num_cpus;
 
 use crate::node_cache::NodeCache;
