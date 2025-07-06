@@ -62,7 +62,7 @@ fi
 echo ""
 echo "🏃 Starting X1 RPC Proxy Server..."
 echo "Service will run at: http://localhost:$PORT"
-echo "Target cluster: https://rpc.testnet.x1.xyz"
+echo "Target cluster: https://api.mainnet-beta.solana.com"
 echo ""
 
 # Start the service with or without sudo
@@ -71,7 +71,7 @@ if [ "$USE_SUDO" = true ]; then
     # Preserve environment variables for cargo and solana
     sudo -E env PATH="$PATH" HOME="$HOME" USER="$USER" cargo run --release -- \
         --port $PORT \
-        --cluster-url https://rpc.testnet.x1.xyz \
+        --cluster-url https://api.mainnet-beta.solana.com \
         --health-check-interval 3600 \
         --node-health-timeout 30 \
         --rpc-request-timeout 60 \
@@ -81,7 +81,7 @@ if [ "$USE_SUDO" = true ]; then
 else
     cargo run --release -- \
         --port $PORT \
-        --cluster-url https://rpc.testnet.x1.xyz \
+        --cluster-url https://api.mainnet-beta.solana.com \
         --health-check-interval 3600 \
         --node-health-timeout 30 \
         --rpc-request-timeout 60 \
