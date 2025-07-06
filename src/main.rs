@@ -30,16 +30,20 @@ struct Args {
     #[arg(long, default_value = "30")]
     health_check_interval: u64,
     
-    /// RPC timeout duration (seconds)
-    #[arg(long, default_value = "10")]
-    rpc_timeout: u64,
+    /// Node health check timeout (seconds) - for fast node validation
+    #[arg(long, default_value = "2")]
+    node_health_timeout: u64,
     
-    /// Maximum concurrent node tests (for single-core optimization)
-    #[arg(long, default_value = "5")]
+    /// RPC request timeout (seconds) - for actual request forwarding
+    #[arg(long, default_value = "60")]
+    rpc_request_timeout: u64,
+    
+    /// Maximum concurrent node tests (optimized for multi-core)
+    #[arg(long, default_value = "50")]
     max_concurrent_tests: usize,
     
-    /// Maximum concurrent RPC requests (for single-core optimization)
-    #[arg(long, default_value = "2")]
+    /// Maximum concurrent RPC requests (optimized for multi-core)
+    #[arg(long, default_value = "100")]
     max_concurrent_rpc_requests: usize,
     
     /// Maximum queue wait time (seconds)
@@ -66,9 +70,13 @@ async fn main() -> Result<()> {
             .init();
     }
     
-    info!("Starting X1 RPC Proxy Server...");
+    info!("🚀 Starting X1 RPC Proxy Server (Multi-Core Mode)...");
     info!("Target cluster: {}", args.cluster_url);
     info!("Max concurrent tests: {}", args.max_concurrent_tests);
+    info!("Max concurrent RPC requests: {}", args.max_concurrent_rpc_requests);
+    info!("Node health check timeout: {}s", args.node_health_timeout);
+    info!("RPC request timeout: {}s", args.rpc_request_timeout);
+    info!("CPU cores available: {}", num_cpus::get());
     
     // Create shared state
     let node_cache = Arc::new(NodeCache::new());
@@ -82,7 +90,7 @@ async fn main() -> Result<()> {
             node_cache_clone, 
             gossip_client_clone, 
             args.health_check_interval, 
-            args.rpc_timeout,
+            args.node_health_timeout,
             args.max_concurrent_tests
         ).await;
     });
@@ -93,7 +101,7 @@ async fn main() -> Result<()> {
     // Start proxy server
     let proxy_server = ProxyServer::new(
         Arc::clone(&node_cache), 
-        args.rpc_timeout,
+        args.rpc_request_timeout,
         args.max_concurrent_rpc_requests,
         args.max_queue_wait_time
     );
@@ -106,7 +114,7 @@ async fn node_discovery_task(
     node_cache: Arc<NodeCache>,
     gossip_client: Arc<GossipClient>,
     health_check_interval: u64,
-    rpc_timeout: u64,
+    node_health_timeout: u64,
     max_concurrent_tests: usize,
 ) {
     let mut interval = tokio::time::interval(Duration::from_secs(health_check_interval));
@@ -122,52 +130,38 @@ async fn node_discovery_task(
         
         match nodes_result {
             Ok(Ok(nodes)) => {
-                info!("Discovered {} potential RPC nodes", nodes.len());
+                info!("📡 Discovered {} potential RPC nodes", nodes.len());
                 
-                // Process nodes in batches to limit concurrency
-                let mut batch_handles = Vec::new();
-                let mut batch_count = 0;
+                //  multi-core optimization: use higher concurrency, no batch processing
+                let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent_tests));
+                let mut handles = Vec::new();
                 
                 for node in nodes {
                     let node_cache_clone = Arc::clone(&node_cache);
-                    let handle = tokio::spawn(async move {
-                        // Add a small delay to prevent overwhelming single core
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        test_and_update_node(node_cache_clone, node, rpc_timeout).await;
-                    });
-                    batch_handles.push(handle);
-                    batch_count += 1;
+                    let semaphore_clone = Arc::clone(&semaphore);
                     
-                    // Process in batches to limit concurrent operations
-                    if batch_count >= max_concurrent_tests {
-                        // Wait for current batch to complete
-                        for handle in batch_handles.drain(..) {
-                            if let Err(e) = handle.await {
-                                error!("Node test task failed: {}", e);
-                            }
-                        }
-                        batch_count = 0;
-                        
-                        // Brief pause between batches
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-                    }
+                    let handle = tokio::spawn(async move {
+                        let _permit = semaphore_clone.acquire().await.unwrap();
+                        test_and_update_node(node_cache_clone, node, node_health_timeout).await;
+                    });
+                    handles.push(handle);
                 }
                 
-                // Wait for remaining tasks
-                for handle in batch_handles {
+                // wait for all tests to complete
+                for handle in handles {
                     if let Err(e) = handle.await {
                         error!("Node test task failed: {}", e);
                     }
                 }
                 
                 let (total, active, min_response, max_response) = node_cache.get_performance_stats().await;
-                info!("Node performance stats - Total: {}, Active: {}", total, active);
+                info!("📊 Node performance stats - Total: {}, Active: {}", total, active);
                 if let (Some(min), Some(max)) = (min_response, max_response) {
-                    info!("Response time range: {:?} - {:?}", min, max);
+                    info!("⚡ Health check response time range: {:?} - {:?}", min, max);
                 }
                 
                 if active == 0 {
-                    warn!("Warning: No active RPC nodes available!");
+                    warn!("⚠️  Warning: No active RPC nodes available!");
                 }
             }
             Ok(Err(e)) => {
@@ -180,20 +174,18 @@ async fn node_discovery_task(
     }
 }
 
-async fn test_and_update_node(node_cache: Arc<NodeCache>, node: types::RpcNode, rpc_timeout: u64) {
+async fn test_and_update_node(node_cache: Arc<NodeCache>, node: types::RpcNode, node_health_timeout: u64) {
     let start_time = std::time::Instant::now();
     
-    // Yield to allow other tasks to run
-    tokio::task::yield_now().await;
-    
-    match rpc_client::test_rpc_node(&node.endpoint, rpc_timeout).await {
+    // use node health check timeout
+    match rpc_client::test_rpc_node(&node.endpoint, node_health_timeout).await {
         Ok(_) => {
             let response_time = start_time.elapsed();
-            info!("RPC node {} is available, response time: {:?}", node.endpoint, response_time);
+            info!("✅ RPC node {} is available, health check time: {:?}", node.endpoint, response_time);
             node_cache.update_node_status(node, true, response_time).await;
         }
         Err(e) => {
-            warn!("RPC node {} is unavailable: {}", node.endpoint, e);
+            warn!("❌ RPC node {} health check failed: {}", node.endpoint, e);
             node_cache.update_node_status(node, false, Duration::from_secs(0)).await;
         }
     }

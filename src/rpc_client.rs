@@ -17,7 +17,7 @@ pub async fn test_rpc_node(endpoint: &str, timeout_secs: u64) -> Result<()> {
         params: None,
     };
     
-    debug!("Testing RPC node: {}", endpoint);
+    debug!("🔍 Testing RPC node: {} (health check timeout: {}s)", endpoint, timeout_secs);
     
     let response = client
         .post(endpoint)
@@ -28,11 +28,11 @@ pub async fn test_rpc_node(endpoint: &str, timeout_secs: u64) -> Result<()> {
     
     if response.status().is_success() {
         let _rpc_response: RpcResponse = response.json().await?;
-        debug!("RPC node {} responded successfully", endpoint);
+        debug!("✅ RPC node {} health check passed", endpoint);
         Ok(())
     } else {
-        error!("RPC node {} returned error status: {}", endpoint, response.status());
-        Err(anyhow::anyhow!("RPC node response error: {}", response.status()))
+        error!("❌ RPC node {} health check failed, status: {}", endpoint, response.status());
+        Err(anyhow::anyhow!("RPC node health check failed: {}", response.status()))
     }
 }
 
@@ -43,7 +43,14 @@ pub async fn forward_rpc_request(
 ) -> Result<RpcResponse> {
     let client = Client::new();
     
-    debug!("Forwarding RPC request to: {}", endpoint);
+    let request_id_str = match &request.id {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => request.id.to_string(),
+    };
+    
+    debug!("🔄 [ID:{}] Forwarding RPC request [{}] to: {} (request timeout: {}s)", 
+           request_id_str, request.method, endpoint, timeout_secs);
     
     let response = client
         .post(endpoint)
@@ -54,9 +61,20 @@ pub async fn forward_rpc_request(
     
     if response.status().is_success() {
         let rpc_response: RpcResponse = response.json().await?;
+        
+        let response_id_str = match &rpc_response.id {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            _ => rpc_response.id.to_string(),
+        };
+        
+        debug!("✅ [ID:{}->{}] RPC request [{}] forwarded successfully to: {}", 
+               request_id_str, response_id_str, request.method, endpoint);
+        
         Ok(rpc_response)
     } else {
-        error!("RPC forwarding failed, status code: {}", response.status());
+        error!("❌ [ID:{}] RPC forwarding failed for [{}] to {}, status code: {}", 
+               request_id_str, request.method, endpoint, response.status());
         Err(anyhow::anyhow!("RPC forwarding failed: {}", response.status()))
     }
 } 

@@ -18,4 +18,5 @@ uuid = { version = "1.0", features = ["v4"] }
 axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors"] }
-hyper = { version = "1.0", features = ["full"] } 
+hyper = { version = "1.0", features = ["full"] }
+num_cpus = "1.0" 

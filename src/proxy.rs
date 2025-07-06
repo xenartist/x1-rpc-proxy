@@ -12,6 +12,9 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn, debug};
 use tower_http::cors::{CorsLayer, Any};
+use std::collections::HashMap;
+use tokio::sync::RwLock;
+use num_cpus;
 
 use crate::node_cache::NodeCache;
 use crate::rpc_client::forward_rpc_request;
@@ -19,7 +22,7 @@ use crate::types::{RpcRequest, RpcResponse, RpcError};
 
 pub struct ProxyServer {
     node_cache: Arc<NodeCache>,
-    rpc_timeout: u64,
+    rpc_request_timeout: u64,
     rpc_semaphore: Arc<Semaphore>,
     max_concurrent: usize,
     max_queue_wait_time: u64,
@@ -28,15 +31,16 @@ pub struct ProxyServer {
 impl ProxyServer {
     pub fn new(
         node_cache: Arc<NodeCache>, 
-        rpc_timeout: u64, 
+        rpc_request_timeout: u64,
         max_concurrent_rpc: usize,
         max_queue_wait_time: u64
     ) -> Self {
-        info!("🚦 Setting up RPC request queue with max {} concurrent requests, queue wait time: {}s", 
-              max_concurrent_rpc, max_queue_wait_time);
+        info!("🚀 Setting up RPC request queue with max {} concurrent requests (Multi-Core Mode)", max_concurrent_rpc);
+        info!("⏱️  RPC request timeout: {}s", rpc_request_timeout);
+        info!("⚡ CPU cores available: {}", num_cpus::get());
         Self {
             node_cache,
-            rpc_timeout,
+            rpc_request_timeout,
             rpc_semaphore: Arc::new(Semaphore::new(max_concurrent_rpc)),
             max_concurrent: max_concurrent_rpc,
             max_queue_wait_time,
@@ -58,14 +62,14 @@ impl ProxyServer {
             )
             .with_state(AppState {
                 node_cache: Arc::clone(&self.node_cache),
-                rpc_timeout: self.rpc_timeout,
+                rpc_request_timeout: self.rpc_request_timeout,
                 rpc_semaphore: Arc::clone(&self.rpc_semaphore),
                 max_concurrent: self.max_concurrent,
                 max_queue_wait_time: self.max_queue_wait_time,
             });
         
         let addr = format!("0.0.0.0:{}", port);
-        info!("RPC proxy server starting on: {}", addr);
+        info!("🌐 RPC proxy server starting on: {}", addr);
         
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         serve(listener, app).await?;
@@ -77,7 +81,7 @@ impl ProxyServer {
 #[derive(Clone)]
 struct AppState {
     node_cache: Arc<NodeCache>,
-    rpc_timeout: u64,
+    rpc_request_timeout: u64,
     rpc_semaphore: Arc<Semaphore>,
     max_concurrent: usize,
     max_queue_wait_time: u64,
@@ -87,16 +91,10 @@ fn format_rpc_request_info(request: &RpcRequest) -> String {
     let method = &request.method;
     let id = &request.id;
     
-    let params_preview = match &request.params {
-        Some(params) => {
-            let params_str = serde_json::to_string(params).unwrap_or_default();
-            if params_str.len() > 100 {
-                format!("{}...", &params_str[..97])
-            } else {
-                params_str
-            }
-        },
-        None => "null".to_string(),
+    let id_str = match id {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => id.to_string(),
     };
     
     match method.as_str() {
@@ -106,12 +104,12 @@ fn format_rpc_request_info(request: &RpcRequest) -> String {
                     if let Some(owner) = params_array.get(0) {
                         if let Some(owner_str) = owner.as_str() {
                             return format!("getTokenAccountsByOwner(owner={}..., id={})", 
-                                         &owner_str[..8.min(owner_str.len())], id);
+                                         &owner_str[..8.min(owner_str.len())], id_str);
                         }
                     }
                 }
             }
-            format!("getTokenAccountsByOwner(id={})", id)
+            format!("getTokenAccountsByOwner(id={})", id_str)
         },
         "getAccountInfo" => {
             if let Some(params) = &request.params {
@@ -119,24 +117,24 @@ fn format_rpc_request_info(request: &RpcRequest) -> String {
                     if let Some(account) = params_array.get(0) {
                         if let Some(account_str) = account.as_str() {
                             return format!("getAccountInfo(account={}..., id={})", 
-                                         &account_str[..8.min(account_str.len())], id);
+                                         &account_str[..8.min(account_str.len())], id_str);
                         }
                     }
                 }
             }
-            format!("getAccountInfo(id={})", id)
+            format!("getAccountInfo(id={})", id_str)
         },
-        "sendTransaction" => format!("sendTransaction(id={})", id),
-        "simulateTransaction" => format!("simulateTransaction(id={})", id),
-        "getBalance" => format!("getBalance(id={})", id),
-        "getRecentBlockhash" => format!("getRecentBlockhash(id={})", id),
-        "getSlot" => format!("getSlot(id={})", id),
-        "getBlockHeight" => format!("getBlockHeight(id={})", id),
-        "getHealth" => format!("getHealth(id={})", id),
-        "getVersion" => format!("getVersion(id={})", id),
-        "getEpochInfo" => format!("getEpochInfo(id={})", id),
-        "getLatestBlockhash" => format!("getLatestBlockhash(id={})", id),
-        _ => format!("{}(params={}, id={})", method, params_preview, id),
+        "sendTransaction" => format!("sendTransaction(id={})", id_str),
+        "simulateTransaction" => format!("simulateTransaction(id={})", id_str),
+        "getBalance" => format!("getBalance(id={})", id_str),
+        "getRecentBlockhash" => format!("getRecentBlockhash(id={})", id_str),
+        "getSlot" => format!("getSlot(id={})", id_str),
+        "getBlockHeight" => format!("getBlockHeight(id={})", id_str),
+        "getHealth" => format!("getHealth(id={})", id_str),
+        "getVersion" => format!("getVersion(id={})", id_str),
+        "getEpochInfo" => format!("getEpochInfo(id={})", id_str),
+        "getLatestBlockhash" => format!("getLatestBlockhash(id={})", id_str),
+        _ => format!("{}(id={})", method, id_str),
     }
 }
 
@@ -148,31 +146,35 @@ async fn rpc_handler(
     let request_info = format_rpc_request_info(&request);
     let available_permits = state.rpc_semaphore.available_permits();
     
-    info!("📨 Incoming RPC request: {} (queue: {}/{})", 
-          request_info, state.max_concurrent - available_permits, state.max_concurrent);
+    let request_id_str = match &request.id {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => request.id.to_string(),
+    };
     
-    // get permit to implement queue mechanism
+    info!("📨 [ID:{}] Incoming RPC request: {} (active: {}/{})", 
+          request_id_str, request_info, state.max_concurrent - available_permits, state.max_concurrent);
+    
     let _permit = match state.rpc_semaphore.try_acquire() {
         Ok(permit) => {
-            debug!("✅ Acquired RPC permit immediately for [{}]", request.method);
+            debug!("⚡ [ID:{}] Acquired RPC permit immediately for [{}]", request_id_str, request.method);
             permit
         },
         Err(_) => {
-            info!("⏳ RPC request [{}] entering queue, waiting for available slot...", request.method);
+            debug!("⏳ [ID:{}] RPC request [{}] waiting for permit...", request_id_str, request.method);
             
-            // use configurable wait time
             match tokio::time::timeout(
                 std::time::Duration::from_secs(state.max_queue_wait_time), 
                 state.rpc_semaphore.acquire()
             ).await {
                 Ok(Ok(permit)) => {
                     let wait_time = start_time.elapsed();
-                    info!("✅ RPC request [{}] acquired permit after waiting {:?}", 
-                          request.method, wait_time);
+                    debug!("⚡ [ID:{}] RPC request [{}] acquired permit after {:?}", 
+                          request_id_str, request.method, wait_time);
                     permit
                 },
                 Ok(Err(_)) => {
-                    error!("💀 RPC semaphore was closed for [{}]", request.method);
+                    error!("💀 [ID:{}] RPC semaphore was closed for [{}]", request_id_str, request.method);
                     let error_response = RpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: request.id,
@@ -187,8 +189,8 @@ async fn rpc_handler(
                 },
                 Err(_) => {
                     let wait_time = start_time.elapsed();
-                    warn!("⏰ RPC request [{}] queue timeout after {:?}, server overloaded", 
-                          request.method, wait_time);
+                    warn!("⏰ [ID:{}] RPC request [{}] queue timeout after {:?}", 
+                          request_id_str, request.method, wait_time);
                     let error_response = RpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: request.id,
@@ -208,34 +210,40 @@ async fn rpc_handler(
         }
     };
 
-    // add small delay for single-core CPU to allow system to handle other tasks
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-
-    // process request
     let processing_start = std::time::Instant::now();
     
     match state.node_cache.get_random_fast_node().await {
         Some(node) => {
             let response_time_info = node.response_time
-                .map(|t| format!(" (avg response: {:?})", t))
-                .unwrap_or_else(|| " (no timing data)".to_string());
+                .map(|t| format!(" (avg health check: {:?})", t))
+                .unwrap_or_else(|| " (no health check data)".to_string());
             
-            info!("🚀 Processing RPC request [{}] to node: {}{}", 
-                  request.method, node.endpoint, response_time_info);
+            info!("🚀 [ID:{}] Processing RPC request [{}] to node: {}{} (timeout: {}s)", 
+                  request_id_str, request.method, node.endpoint, response_time_info, state.rpc_request_timeout);
             
-            match forward_rpc_request(&node.endpoint, &request, state.rpc_timeout).await {
+            match forward_rpc_request(&node.endpoint, &request, state.rpc_request_timeout).await {
                 Ok(response) => {
                     let processing_time = processing_start.elapsed();
                     let total_time = start_time.elapsed();
-                    info!("✅ RPC request [{}] completed - processing: {:?}, total: {:?}", 
-                          request.method, processing_time, total_time);
+                    
+                    let has_result = response.result.is_some();
+                    let has_error = response.error.is_some();
+                    
+                    info!("✅ [ID:{}] RPC request [{}] completed - processing: {:?}, total: {:?}, has_result: {}, has_error: {}", 
+                          request_id_str, request.method, processing_time, total_time, has_result, has_error);
+                    
+                    if !has_result && !has_error {
+                        warn!("⚠️  [ID:{}] Response has no result and no error", request_id_str);
+                    }
+                    
                     Ok(Json(response))
                 },
                 Err(e) => {
                     let processing_time = processing_start.elapsed();
                     let total_time = start_time.elapsed();
-                    error!("❌ RPC request [{}] failed - processing: {:?}, total: {:?}, error: {}", 
-                           request.method, processing_time, total_time, e);
+                    error!("❌ [ID:{}] RPC request [{}] failed after {:?} (timeout: {}s) - error: {}", 
+                           request_id_str, request.method, processing_time, state.rpc_request_timeout, e);
+                    
                     let error_response = RpcResponse {
                         jsonrpc: "2.0".to_string(),
                         id: request.id,
@@ -256,7 +264,8 @@ async fn rpc_handler(
         }
         None => {
             let total_time = start_time.elapsed();
-            warn!("💥 No available RPC nodes for [{}] after {:?}", request.method, total_time);
+            warn!("💥 [ID:{}] No available RPC nodes for [{}] after {:?}", 
+                  request_id_str, request.method, total_time);
             let error_response = RpcResponse {
                 jsonrpc: "2.0".to_string(),
                 id: request.id,
@@ -272,13 +281,14 @@ async fn rpc_handler(
             Err((StatusCode::SERVICE_UNAVAILABLE, Json(error_response)))
         }
     }
-    // _permit is automatically released here
 }
 
 async fn health_handler() -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
-        "service": "x1-rpc-proxy"
+        "service": "x1-rpc-proxy",
+        "mode": "multi-core",
+        "cpu_cores": num_cpus::get()
     }))
 }
 
@@ -288,7 +298,9 @@ async fn stats_handler(State(state): State<AppState>) -> Json<serde_json::Value>
     Json(json!({
         "total_nodes": total,
         "active_nodes": active,
-        "uptime": "running"
+        "uptime": "running",
+        "mode": "multi-core",
+        "cpu_cores": num_cpus::get()
     }))
 }
 
@@ -298,13 +310,15 @@ async fn performance_handler(State(state): State<AppState>) -> Json<serde_json::
     Json(json!({
         "total_nodes": total,
         "active_nodes": active,
-        "min_response_time_ms": min_response.map(|t| t.as_millis()),
-        "max_response_time_ms": max_response.map(|t| t.as_millis()),
-        "performance_optimization": "top_100_fastest_nodes"
+        "min_health_check_time_ms": min_response.map(|t| t.as_millis()),
+        "max_health_check_time_ms": max_response.map(|t| t.as_millis()),
+        "rpc_request_timeout_ms": state.rpc_request_timeout * 1000,
+        "performance_optimization": "top_100_fastest_nodes",
+        "mode": "multi-core",
+        "cpu_cores": num_cpus::get()
     }))
 }
 
-// add queue status monitoring endpoint
 async fn queue_stats_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
     let available_permits = state.rpc_semaphore.available_permits();
     let active_requests = state.max_concurrent - available_permits;
@@ -315,6 +329,10 @@ async fn queue_stats_handler(State(state): State<AppState>) -> Json<serde_json::
             "active_requests": active_requests,
             "available_slots": available_permits,
             "queue_full": available_permits == 0
+        },
+        "system_info": {
+            "mode": "multi-core",
+            "cpu_cores": num_cpus::get()
         }
     }))
 } 
