@@ -2,10 +2,11 @@ use anyhow::Result;
 use axum::{
     extract::State,
     http::StatusCode,
-    response::Json,
+    response::{Json, Response},
     routing::post,
     Router,
     serve,
+    body::Body,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use tower_http::cors::{CorsLayer, Any};
 use num_cpus;
 
 use crate::node_cache::NodeCache;
-use crate::rpc_client::forward_rpc_request;
+use crate::rpc_client::{forward_rpc_request_raw};
 use crate::types::{RpcRequest, RpcResponse, RpcError};
 
 pub struct ProxyServer {
@@ -139,7 +140,7 @@ fn format_rpc_request_info(request: &RpcRequest) -> String {
 async fn rpc_handler(
     State(state): State<AppState>,
     Json(request): Json<RpcRequest>,
-) -> Result<Json<RpcResponse>, (StatusCode, Json<RpcResponse>)> {
+) -> Result<Response<Body>, (StatusCode, Json<RpcResponse>)> {
     let start_time = std::time::Instant::now();
     let request_info = format_rpc_request_info(&request);
     let available_permits = state.rpc_semaphore.available_permits();
@@ -219,22 +220,20 @@ async fn rpc_handler(
             info!("🚀 [ID:{}] Processing RPC request [{}] to node: {}{} (timeout: {}s)", 
                   request_id_str, request.method, node.endpoint, response_time_info, state.rpc_request_timeout);
             
-            match forward_rpc_request(&node.endpoint, &request, state.rpc_request_timeout).await {
-                Ok(response) => {
+            match forward_rpc_request_raw(&node.endpoint, &request, state.rpc_request_timeout).await {
+                Ok(raw_response) => {
                     let processing_time = processing_start.elapsed();
                     let total_time = start_time.elapsed();
                     
-                    let has_result = response.result.is_some();
-                    let has_error = response.error.is_some();
+                    info!("✅ [ID:{}] RPC request [{}] completed - processing: {:?}, total: {:?}", 
+                          request_id_str, request.method, processing_time, total_time);
                     
-                    info!("✅ [ID:{}] RPC request [{}] completed - processing: {:?}, total: {:?}, has_result: {}, has_error: {}", 
-                          request_id_str, request.method, processing_time, total_time, has_result, has_error);
-                    
-                    if !has_result && !has_error {
-                        warn!("⚠️  [ID:{}] Response has no result and no error", request_id_str);
-                    }
-                    
-                    Ok(Json(response))
+                    // return raw json response
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/json")
+                        .body(Body::from(raw_response))
+                        .unwrap())
                 },
                 Err(e) => {
                     let processing_time = processing_start.elapsed();

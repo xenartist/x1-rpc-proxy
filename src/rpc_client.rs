@@ -36,11 +36,11 @@ pub async fn test_rpc_node(endpoint: &str, timeout_secs: u64) -> Result<()> {
     }
 }
 
-pub async fn forward_rpc_request(
+pub async fn forward_rpc_request_raw(
     endpoint: &str,
     request: &RpcRequest,
     timeout_secs: u64,
-) -> Result<RpcResponse> {
+) -> Result<String> {
     let client = Client::new();
     
     let request_id_str = match &request.id {
@@ -60,18 +60,10 @@ pub async fn forward_rpc_request(
         .await?;
     
     if response.status().is_success() {
-        let rpc_response: RpcResponse = response.json().await?;
-        
-        let response_id_str = match &rpc_response.id {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Number(n) => n.to_string(),
-            _ => rpc_response.id.to_string(),
-        };
-        
-        debug!("✅ [ID:{}->{}] RPC request [{}] forwarded successfully to: {}", 
-               request_id_str, response_id_str, request.method, endpoint);
-        
-        Ok(rpc_response)
+        let raw_response = response.text().await?;
+        debug!("✅ [ID:{}] RPC request [{}] forwarded successfully to: {}", 
+               request_id_str, request.method, endpoint);
+        Ok(raw_response)
     } else {
         error!("❌ [ID:{}] RPC forwarding failed for [{}] to {}, status code: {}", 
                request_id_str, request.method, endpoint, response.status());
