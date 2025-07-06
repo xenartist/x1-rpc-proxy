@@ -30,21 +30,21 @@ struct Args {
     #[arg(long, default_value = "30")]
     health_check_interval: u64,
     
-    /// Node health check timeout (seconds) - for fast node validation
+    /// Node health check timeout (seconds)
     #[arg(long, default_value = "2")]
     node_health_timeout: u64,
     
-    /// RPC request timeout (seconds) - for actual request forwarding
+    /// RPC request timeout (seconds)
     #[arg(long, default_value = "60")]
     rpc_request_timeout: u64,
     
-    /// Maximum concurrent node tests (optimized for multi-core)
-    #[arg(long, default_value = "50")]
-    max_concurrent_tests: usize,
+    /// Maximum concurrent node tests (auto-adjusted based on CPU cores if not specified)
+    #[arg(long)]
+    max_concurrent_tests: Option<usize>,
     
-    /// Maximum concurrent RPC requests (optimized for multi-core)
-    #[arg(long, default_value = "100")]
-    max_concurrent_rpc_requests: usize,
+    /// Maximum concurrent RPC requests (auto-adjusted based on CPU cores if not specified)
+    #[arg(long)]
+    max_concurrent_rpc_requests: Option<usize>,
     
     /// Maximum queue wait time (seconds)
     #[arg(long, default_value = "30")]
@@ -59,6 +59,26 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
     
+    // auto-adjust concurrency parameters based on CPU cores
+    let cpu_cores = num_cpus::get();
+    let max_concurrent_tests = args.max_concurrent_tests.unwrap_or_else(|| {
+        match cpu_cores {
+            1 => 5,           // single-core: 5 concurrent tests
+            2..=4 => 20,      // 2-4 cores: 20 concurrent tests
+            5..=8 => 40,      // 5-8 cores: 40 concurrent tests
+            _ => 60,          // 8+ cores: 60 concurrent tests
+        }
+    });
+    
+    let max_concurrent_rpc_requests = args.max_concurrent_rpc_requests.unwrap_or_else(|| {
+        match cpu_cores {
+            1 => 3,           // single-core: 3 concurrent RPC requests
+            2..=4 => 20,      // 2-4 cores: 20 concurrent RPC requests
+            5..=8 => 60,      // 5-8 cores: 60 concurrent RPC requests
+            _ => 100,         // 8+ cores: 100 concurrent RPC requests
+        }
+    });
+    
     // Set log level based on verbose flag
     if args.verbose {
         tracing_subscriber::fmt()
@@ -70,13 +90,26 @@ async fn main() -> Result<()> {
             .init();
     }
     
-    info!("🚀 Starting X1 RPC Proxy Server (Multi-Core Mode)...");
+    // show hardware and configuration information
+    match cpu_cores {
+        1 => {
+            info!("🔧 Single-Core CPU detected - Using optimized settings for single-core performance");
+            info!("💡 Tip: Consider using dedicated single-core parameters for better performance");
+        },
+        2..=4 => {
+            info!("🔧 Multi-Core CPU detected ({} cores) - Using balanced settings", cpu_cores);
+        },
+        _ => {
+            info!("🔧 High-Performance CPU detected ({} cores) - Using high-concurrency settings", cpu_cores);
+        }
+    }
+    
+    info!("🚀 Starting X1 RPC Proxy Server...");
     info!("Target cluster: {}", args.cluster_url);
-    info!("Max concurrent tests: {}", args.max_concurrent_tests);
-    info!("Max concurrent RPC requests: {}", args.max_concurrent_rpc_requests);
+    info!("Max concurrent tests: {} (auto-adjusted)", max_concurrent_tests);
+    info!("Max concurrent RPC requests: {} (auto-adjusted)", max_concurrent_rpc_requests);
     info!("Node health check timeout: {}s", args.node_health_timeout);
     info!("RPC request timeout: {}s", args.rpc_request_timeout);
-    info!("CPU cores available: {}", num_cpus::get());
     
     // Create shared state
     let node_cache = Arc::new(NodeCache::new());
@@ -91,7 +124,7 @@ async fn main() -> Result<()> {
             gossip_client_clone, 
             args.health_check_interval, 
             args.node_health_timeout,
-            args.max_concurrent_tests
+            max_concurrent_tests
         ).await;
     });
     
@@ -102,7 +135,7 @@ async fn main() -> Result<()> {
     let proxy_server = ProxyServer::new(
         Arc::clone(&node_cache), 
         args.rpc_request_timeout,
-        args.max_concurrent_rpc_requests,
+        max_concurrent_rpc_requests,
         args.max_queue_wait_time
     );
     proxy_server.start(args.port).await?;

@@ -75,9 +75,9 @@ if [ "$USE_SUDO" = true ]; then
         --health-check-interval 3600 \
         --node-health-timeout 2 \
         --rpc-request-timeout 60 \
-        --max-concurrent-rpc-requests 100 \
-        --max-concurrent-tests 50 \
-        --max-queue-wait-time 30
+        # --max-concurrent-rpc-requests 2 \
+        # --max-concurrent-tests 5 \
+        # --max-queue-wait-time 30
 else
     cargo run --release -- \
         --port $PORT \
@@ -85,7 +85,7 @@ else
         --health-check-interval 3600 \
         --node-health-timeout 2 \
         --rpc-request-timeout 60 \
-        --max-concurrent-rpc-requests 100 \
-        --max-concurrent-tests 50 \
-        --max-queue-wait-time 30
+        # --max-concurrent-rpc-requests 100 \
+        # --max-concurrent-tests 50 \
+        # --max-queue-wait-time 30
 fi 
