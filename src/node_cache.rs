@@ -117,4 +117,21 @@ impl NodeCache {
         let active = nodes.values().filter(|node| node.is_active).count();
         (total, active)
     }
+    
+    /// Remove a node from the cache (typically due to RPC failures or timeouts)
+    pub async fn remove_node(&self, endpoint: &str) {
+        let mut nodes = self.nodes.write().await;
+        if nodes.remove(endpoint).is_some() {
+            debug!("🗑️  Removed failed node from cache: {}", endpoint);
+        }
+    }
+    
+    /// Mark a node as inactive without removing it (less aggressive than remove_node)
+    pub async fn mark_node_inactive(&self, endpoint: &str) {
+        let mut nodes = self.nodes.write().await;
+        if let Some(node) = nodes.get_mut(endpoint) {
+            node.is_active = false;
+            debug!("❌ Marked node as inactive: {}", endpoint);
+        }
+    }
 } 

@@ -220,6 +220,8 @@ async fn rpc_handler(
             info!("🚀 [ID:{}] Processing RPC request [{}] to node: {}{} (timeout: {}s)", 
                   request_id_str, request.method, node.endpoint, response_time_info, state.rpc_request_timeout);
             
+            let node_endpoint = node.endpoint.clone(); // Clone the endpoint for error handling
+            
             match forward_rpc_request_raw(&node.endpoint, &request, state.rpc_request_timeout).await {
                 Ok(raw_response) => {
                     let processing_time = processing_start.elapsed();
@@ -240,6 +242,10 @@ async fn rpc_handler(
                     let total_time = start_time.elapsed();
                     error!("❌ [ID:{}] RPC request [{}] failed after {:?} (timeout: {}s) - error: {}", 
                            request_id_str, request.method, processing_time, state.rpc_request_timeout, e);
+                    
+                    // Remove the failed node from cache to prevent future requests to it
+                    warn!("🗑️  [ID:{}] Removing failed node {} from active nodes list", request_id_str, node_endpoint);
+                    state.node_cache.remove_node(&node_endpoint).await;
                     
                     let error_response = RpcResponse {
                         jsonrpc: "2.0".to_string(),
